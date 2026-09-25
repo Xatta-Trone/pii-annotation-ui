@@ -47,6 +47,24 @@ Highlight narrative text, choose a label, and add the annotation. Gold annotatio
 
 Custom labels are normalized to `UPPERCASE_SNAKE_CASE`. They are recovered from valid gold entities when an exported dataset is uploaded again. Use **Download Annotated Dataset** for a complete portable checkpoint and re-upload that file to resume. **Download Label Schema** exports both default and custom labels.
 
+## Temporary refresh recovery
+
+Uploading a dataset creates a unique URL such as:
+
+```text
+http://localhost:8501/?session=FILE_HASH-TIMESTAMP
+```
+
+The working dataframe, draft annotations, notes, filters, labels, and current row are retained in the running Streamlit server's memory. The browser stores only the session key and last-activity time in per-tab `sessionStorage`; it does not store the narrative dataset in browser storage.
+
+- Refreshing the page restores the current work automatically.
+- Returning to the base app URL in the same browser tab redirects to the active session.
+- A session expires after 15 minutes without activity and is then removed from memory.
+- **Start / Upload New Dataset** clears the browser route and returns to the upload screen. The old URL remains usable until its normal expiry.
+- Restarting the Streamlit server clears all temporary URL sessions. Downloaded annotated datasets remain the authoritative durable backup.
+
+Treat a live session URL as temporary access to the in-memory annotation session. Do not share it.
+
 Run tests with:
 
 ```powershell

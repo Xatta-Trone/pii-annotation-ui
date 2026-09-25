@@ -6,17 +6,30 @@ from datetime import datetime
 import pandas as pd
 import streamlit as st
 
-from span_selector import span_selector
+from span_selector import session_router, span_selector
 from src.annotations import AnnotationError, add_annotation, change_label, delete_annotation, serialize_annotations
 from src.config import DEFAULT_LABELS, VALID_STATUSES
 from src.data_io import export_dataset, file_identity, load_dataset
 from src.label_manager import add_custom_label, label_schema_json, recover_custom_labels
 from src.navigation import filtered_indices, find_crash_id, jump_to_row, move
+from src.session_store import (
+    SESSION_TTL_SECONDS,
+    create_session_id,
+    prune_expired_sessions,
+    restore_session,
+    save_session,
+)
 from src.ui_helpers import display_selection, render_weak_entities, scalar
 from src.validation import parse_json_list, validate_entities, validate_span
 
 
 st.set_page_config(page_title="Gold PII Annotation Tool", page_icon="🔒", layout="wide")
+
+
+@st.cache_resource
+def get_web_session_store() -> dict:
+    """Process-local transient storage shared across Streamlit page refreshes."""
+    return {}
 
 
 def init_state() -> None:
@@ -29,6 +42,10 @@ def init_state() -> None:
         "drafts": {},
         "load_warnings": [],
         "flash": None,
+        "web_session_id": None,
+        "clear_browser_route": False,
+        "processed_router_event": None,
+        "landing_warning": None,
     }
     for key, value in defaults.items():
         if key not in st.session_state:
@@ -82,6 +99,7 @@ def save_row(row_index: int, status: str | None = None) -> bool:
     frame.at[row_index, "annotation_status"] = draft["status"]
     frame.at[row_index, "annotator_notes"] = draft["notes"]
     st.session_state.flash = f"Saved row {row_index + 1}."
+    persist_web_session()
     return True
 
 
@@ -96,13 +114,104 @@ def export_with_drafts() -> pd.DataFrame:
     return exported
 
 
+def persist_web_session() -> None:
+    session_id = st.session_state.web_session_id
+    if not session_id or st.session_state.dataframe is None:
+        return
+    save_session(
+        WEB_SESSION_STORE,
+        session_id,
+        {
+            "dataframe": st.session_state.dataframe,
+            "current_row_index": st.session_state.current_row_index,
+            "uploaded_file_identity": st.session_state.uploaded_file_identity,
+            "custom_labels": st.session_state.custom_labels,
+            "filter_state": st.session_state.filter_state,
+            "drafts": st.session_state.drafts,
+            "load_warnings": st.session_state.load_warnings,
+        },
+    )
+
+
+def restore_web_session(snapshot: dict, session_id: str) -> None:
+    for key in (
+        "dataframe", "current_row_index", "uploaded_file_identity", "custom_labels",
+        "filter_state", "drafts", "load_warnings",
+    ):
+        st.session_state[key] = snapshot[key]
+    st.session_state.web_session_id = session_id
+    filters = snapshot.get("filter_state", {})
+    st.session_state["status_filter"] = filters.get("statuses", [])
+    st.session_state["source_filter"] = filters.get("source_classes", [])
+    st.session_state["year_filter"] = filters.get("years", [])
+    st.session_state["only_not_annotated"] = False
+    st.session_state.flash = "Recovered the recent annotation session."
+
+
+def start_new_dataset() -> None:
+    """Return to upload without destroying the still-live server snapshot."""
+    for key, value in {
+        "dataframe": None,
+        "current_row_index": 0,
+        "uploaded_file_identity": None,
+        "custom_labels": [],
+        "filter_state": {},
+        "drafts": {},
+        "load_warnings": [],
+        "flash": None,
+        "web_session_id": None,
+    }.items():
+        st.session_state[key] = value
+    st.session_state.clear_browser_route = True
+    st.query_params.clear()
+
+
 def navigate(step: int, indices: list[int]) -> None:
     st.session_state.current_row_index = move(st.session_state.current_row_index, indices, step)
+    persist_web_session()
     st.rerun()
 
 
 init_state()
+WEB_SESSION_STORE = get_web_session_store()
+prune_expired_sessions(WEB_SESSION_STORE)
 st.title("Gold PII Annotation Tool")
+
+url_session_id = str(st.query_params.get("session", "")) or None
+router_event = session_router(
+    current_session=url_session_id,
+    reset=st.session_state.clear_browser_route,
+    ttl_seconds=SESSION_TTL_SECONDS,
+    key="browser_session_router",
+)
+st.session_state.clear_browser_route = False
+
+if router_event and router_event.get("event_id") != st.session_state.processed_router_event:
+    st.session_state.processed_router_event = router_event.get("event_id")
+    action = router_event.get("action")
+    routed_session_id = router_event.get("session_id")
+    if action == "resume" and not url_session_id and routed_session_id:
+        if restore_session(WEB_SESSION_STORE, routed_session_id) is not None:
+            st.query_params["session"] = routed_session_id
+            st.rerun()
+        st.session_state.clear_browser_route = True
+        st.session_state.landing_warning = "The previous browser session has expired. Upload a dataset to begin again."
+    elif action == "expired":
+        if routed_session_id:
+            WEB_SESSION_STORE.pop(routed_session_id, None)
+        if url_session_id:
+            start_new_dataset()
+            st.session_state.landing_warning = "The annotation session expired after 15 minutes of inactivity."
+            st.rerun()
+
+if st.session_state.dataframe is None and url_session_id:
+    snapshot = restore_session(WEB_SESSION_STORE, url_session_id)
+    if snapshot is not None:
+        restore_web_session(snapshot, url_session_id)
+    else:
+        start_new_dataset()
+        st.session_state.landing_warning = "This annotation URL has expired or is no longer available."
+        st.rerun()
 
 uploaded = st.file_uploader("Upload crash-narrative dataset", type=["csv", "tsv"])
 if uploaded is not None:
@@ -122,10 +231,17 @@ if uploaded is not None:
         st.session_state.drafts, st.session_state.load_warnings = initialize_drafts(loaded)
         remaining = loaded.index[loaded["annotation_status"] == "NOT_ANNOTATED"].tolist()
         st.session_state.current_row_index = remaining[0] if remaining else 0
+        session_id = create_session_id(identity)
+        st.session_state.web_session_id = session_id
+        st.query_params["session"] = session_id
+        persist_web_session()
         st.session_state.flash = f"Loaded {len(loaded):,} records."
         st.rerun()
 
 if st.session_state.dataframe is None:
+    if st.session_state.landing_warning:
+        st.warning(st.session_state.landing_warning)
+        st.session_state.landing_warning = None
     st.info("Upload a UTF-8 CSV or TSV containing crash_id, clean_narrative, and weak_pii_entities_json.")
     st.stop()
 
@@ -133,6 +249,13 @@ df: pd.DataFrame = st.session_state.dataframe
 
 # Sidebar filters and dashboard
 with st.sidebar:
+    st.caption(f"Temporary session: `{st.session_state.web_session_id}`")
+    st.caption("Automatically recoverable for 15 minutes after the last activity.")
+    if st.button("Start / Upload New Dataset", width="stretch"):
+        persist_web_session()
+        start_new_dataset()
+        st.rerun()
+
     st.header("Progress summary")
     status_counts = df["annotation_status"].value_counts()
     completed = int(status_counts.get("COMPLETED", 0))
@@ -150,7 +273,7 @@ with st.sidebar:
 
     st.header("Filters")
     only_unannotated = st.checkbox("Show only NOT_ANNOTATED", key="only_not_annotated")
-    selected_statuses = st.multiselect("Annotation status", VALID_STATUSES, default=[], key="status_filter")
+    selected_statuses = st.multiselect("Annotation status", VALID_STATUSES, key="status_filter")
     if only_unannotated:
         selected_statuses = ["NOT_ANNOTATED"]
     source_options = sorted(df["source_class"].astype(str).unique()) if "source_class" in df else []
@@ -173,11 +296,13 @@ with st.sidebar:
     row_number = st.number_input("Jump to row", min_value=1, max_value=len(df), value=st.session_state.current_row_index + 1)
     if st.button("Go to row", width="stretch"):
         st.session_state.current_row_index = jump_to_row(int(row_number), len(df))
+        persist_web_session()
         st.rerun()
     crash_target = st.text_input("Jump to crash ID")
     if st.button("Go to crash ID", width="stretch"):
         try:
             st.session_state.current_row_index = find_crash_id(df, crash_target)
+            persist_web_session()
             st.rerun()
         except ValueError as exc:
             st.error(str(exc))
@@ -190,6 +315,7 @@ with st.sidebar:
         try:
             st.session_state.custom_labels = add_custom_label(st.session_state.custom_labels, custom_value)
             st.success(f"Added {st.session_state.custom_labels[-1]}")
+            persist_web_session()
             st.rerun()
         except ValueError as exc:
             st.error(str(exc))
@@ -249,6 +375,7 @@ if add_columns[1].button("Add annotation", type="primary", width="stretch", disa
         draft["entities"] = add_annotation(draft["entities"], entity, narrative, active_labels())
         st.session_state[f"processed_selection_{row_index}"] = current_selection.get("selection_id")
         st.session_state.pop(f"selection_{row_index}", None)
+        persist_web_session()
         st.rerun()
     except (AnnotationError, KeyError, TypeError, ValueError) as exc:
         st.error(str(exc))
@@ -269,6 +396,7 @@ for annotation_index, entity in enumerate(list(draft["entities"])):
         draft["entities"] = change_label(draft["entities"], annotation_index, new_label, active_labels())
     if cols[4].button("Delete", key=f"delete_{row_index}_{annotation_index}"):
         draft["entities"] = delete_annotation(draft["entities"], annotation_index)
+        persist_web_session()
         st.rerun()
 
 render_weak_entities(row["weak_pii_entities_json"])
@@ -278,6 +406,7 @@ draft["notes"] = st.text_area("Notes", value=draft["notes"], key=f"notes_{row_in
 draft["status"] = st.selectbox(
     "Annotation status", VALID_STATUSES, index=VALID_STATUSES.index(draft["status"]), key=f"status_{row_index}"
 )
+persist_web_session()
 
 buttons = st.columns(6)
 if buttons[0].button("Previous", width="stretch"):

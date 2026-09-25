@@ -57,5 +57,45 @@ function Selector({args}) {
   </div>;
 }
 
-const Connected = withStreamlitConnection(Selector);
+function SessionRouter({args}) {
+  useEffect(() => {
+    Streamlit.setFrameHeight(0);
+    const sessionKey = "gold_pii_annotation_session";
+    const activityKey = "gold_pii_annotation_last_activity";
+    const now = Date.now();
+    const ttlMs = Number(args.ttl_seconds || 900) * 1000;
+    const eventId = `${now}-${Math.random()}`;
+
+    if (args.reset) {
+      sessionStorage.removeItem(sessionKey);
+      sessionStorage.removeItem(activityKey);
+      Streamlit.setComponentValue({action: "cleared", event_id: eventId});
+      return;
+    }
+
+    const storedSession = sessionStorage.getItem(sessionKey) || "";
+    const lastActivity = Number(sessionStorage.getItem(activityKey) || 0);
+    if (lastActivity && now - lastActivity > ttlMs) {
+      sessionStorage.removeItem(sessionKey);
+      sessionStorage.removeItem(activityKey);
+      Streamlit.setComponentValue({action: "expired", session_id: storedSession, event_id: eventId});
+      return;
+    }
+
+    if (args.current_session) {
+      sessionStorage.setItem(sessionKey, args.current_session);
+      sessionStorage.setItem(activityKey, String(now));
+      Streamlit.setComponentValue({action: "active", session_id: args.current_session, event_id: eventId});
+    } else if (storedSession) {
+      Streamlit.setComponentValue({action: "resume", session_id: storedSession, event_id: eventId});
+    }
+  }, [args.current_session, args.reset, args.ttl_seconds]);
+  return null;
+}
+
+function Component({args}) {
+  return args.mode === "session_router" ? <SessionRouter args={args} /> : <Selector args={args} />;
+}
+
+const Connected = withStreamlitConnection(Component);
 createRoot(document.getElementById("root")).render(<Connected />);
