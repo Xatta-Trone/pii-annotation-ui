@@ -1,0 +1,15 @@
+DEFAULT_LABELS = [
+    "PERSON", "PHONE_NUMBER", "EMAIL_ADDRESS", "SSN", "PASSPORT_NUMBER",
+    "DRIVER_LICENSE_NUMBER", "VEHICLE_IDENTIFIER", "INSURANCE_NUMBER", "DATE",
+    "ADDRESS", "LOCATION", "EMS_IDENTIFIER", "REPORT_IDENTIFIER",
+    "MEDICAL_FACILITY", "OTHER_FACILITY", "NUMERIC_VALUE", "OTHER", "UNCERTAIN",
+]
+
+VALID_STATUSES = ["NOT_ANNOTATED", "COMPLETED", "NEEDS_REVIEW"]
+REQUIRED_COLUMNS = ["crash_id", "clean_narrative", "weak_pii_entities_json"]
+ANNOTATION_COLUMNS = {
+    "annotation_status": "NOT_ANNOTATED",
+    "gold_entities_json": "",
+    "annotator_notes": "",
+}
+

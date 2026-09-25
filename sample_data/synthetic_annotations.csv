@@ -1,0 +1,5 @@
+crash_id,year,source_class,word_count,char_count,clean_narrative,weak_pii_entities_json,annotation_status,gold_entities_json,annotator_notes,gold_reserve_type,gold_reserve_version
+SYN-001,2025,SYNTHETIC,6,42,The driver John Smith called 801-555-1234.,"[{""text"":""John Smith"",""start"":11,""end"":21}]",NOT_ANNOTATED,,,synthetic,v1
+SYN-002,2025,SYNTHETIC,10,66,John Smith spoke with staff. Later John Smith left the facility.,[],NOT_ANNOTATED,,,synthetic,v1
+SYN-003,2025,SYNTHETIC,5,27,"First line
+José reported no injuries.",[],COMPLETED,[],Confirmed no PII.,synthetic,v1
