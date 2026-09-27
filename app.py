@@ -473,9 +473,17 @@ with gold_column:
     )
     if add_columns[1].button("Add annotation", type="primary", width="stretch", disabled=not current_selection):
         try:
+            raw_selection_text = str(current_selection["text"])
+            trimmed_selection_text = raw_selection_text.strip()
+            if not trimmed_selection_text:
+                raise AnnotationError("Select at least one non-whitespace character.")
+            leading_whitespace_count = len(raw_selection_text) - len(raw_selection_text.lstrip())
+            trimmed_start = int(current_selection["start_char"]) + leading_whitespace_count
             entity = {
-                "text": current_selection["text"], "label": selected_label,
-                "start_char": int(current_selection["start_char"]), "end_char": int(current_selection["end_char"]),
+                "text": trimmed_selection_text,
+                "label": selected_label,
+                "start_char": trimmed_start,
+                "end_char": trimmed_start + len(trimmed_selection_text),
             }
             draft["entities"] = add_annotation(draft["entities"], entity, narrative, active_labels())
             st.session_state[f"processed_selection_{row_index}"] = current_selection.get("selection_id")

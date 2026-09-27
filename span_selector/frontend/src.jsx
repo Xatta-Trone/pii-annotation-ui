@@ -62,11 +62,17 @@ function Selector({args}) {
     if (!root.contains(range.startContainer) || !root.contains(range.endContainer)) return;
     const start = offsetWithin(root, range.startContainer, range.startOffset);
     const end = offsetWithin(root, range.endContainer, range.endOffset);
-    const lo = Math.min(start, end), hi = Math.max(start, end);
-    if (lo === hi) return;
+    const chars = Array.from(args.text || "");
+    const rawStart = Math.min(start, end), rawEnd = Math.max(start, end);
+    const rawText = chars.slice(rawStart, rawEnd).join("");
+    const leadingWhitespace = rawText.match(/^\s*/u)?.[0] || "";
+    const trailingWhitespace = rawText.match(/\s*$/u)?.[0] || "";
+    const lo = rawStart + Array.from(leadingWhitespace).length;
+    const hi = rawEnd - Array.from(trailingWhitespace).length;
+    if (lo >= hi) return;
     Streamlit.setComponentValue({
       event_type: "selection",
-      text: Array.from(args.text || "").slice(lo, hi).join(""), start_char: lo, end_char: hi,
+      text: chars.slice(lo, hi).join(""), start_char: lo, end_char: hi,
       selection_id: `${Date.now()}-${Math.random()}`
     });
   }
