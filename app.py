@@ -7,7 +7,6 @@ import pandas as pd
 import streamlit as st
 
 from span_selector import _component as span_selector_component
-from span_selector import keyboard_navigation, session_router
 from src.annotations import AnnotationError, add_annotation, change_label, delete_annotation, serialize_annotations
 from src.config import DEFAULT_LABELS, VALID_STATUSES
 from src.data_io import export_dataset, file_identity, load_dataset
@@ -35,6 +34,23 @@ st.markdown(
     """,
     unsafe_allow_html=True,
 )
+
+
+def session_router(current_session: str | None, reset: bool, ttl_seconds: int, key: str):
+    """Call the browser-session mode without relying on a hot-reloaded wrapper import."""
+    return span_selector_component(
+        mode="session_router",
+        current_session=current_session or "",
+        reset=reset,
+        ttl_seconds=ttl_seconds,
+        key=key,
+        default=None,
+    )
+
+
+def keyboard_navigation(key: str):
+    """Call the keyboard-navigation mode through the stable component handle."""
+    return span_selector_component(mode="keyboard_navigation", key=key, default=None)
 
 
 @st.cache_resource
