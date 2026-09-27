@@ -43,7 +43,7 @@ Offsets use Python slicing conventions: start is inclusive and end is exclusive.
 
 Highlight narrative text, choose a label, and add the annotation. Gold annotations can be relabeled or deleted. Adjacent spans are allowed; overlapping and exact duplicate annotations are rejected.
 
-The record view keeps `clean_narrative` as the only selectable text and the only source of Gold offsets. Immediately below it, **Cleaned Redacted Narrative** shows `clean_redactedNarrative` for comparison, followed by **Weak PII Reference**. Weak entities show their text and `[start, end)` offsets, but are never copied into Gold. An empty weak list does not indicate that the narrative contains no PII and does not change annotation status.
+The record view shows **Clean Narrative** and **Cleaned Redacted Narrative** side by side with synchronized proportional scrolling. `clean_narrative` remains the only selectable text and the only source of Gold offsets. Case-insensitive `xxx` placeholders are highlighted in the redacted comparison. Below the narratives, Gold controls and annotations appear in the left column and **Weak PII Reference** appears in the right column. Weak and Gold entities show compact `text (start, end)` offsets. Weak entities are never copied into Gold, and an empty weak list does not indicate that the narrative contains no PII or change annotation status.
 
 - `NOT_ANNOTATED`: not finalized.
 - `COMPLETED`: manually reviewed, including records with no PII (`gold_entities_json = []`).
@@ -52,6 +52,10 @@ The record view keeps `clean_narrative` as the only selectable text and the only
 Custom labels are normalized to `UPPERCASE_SNAKE_CASE`. They are recovered from valid gold entities when an exported dataset is uploaded again. Use **Download Annotated Dataset** for a complete portable checkpoint and re-upload that file to resume. **Download Label Schema** exports both default and custom labels.
 
 Previous, Next, Save & Next, Mark Completed & Next, row jumps, crash-ID jumps, and the Left/Right arrow shortcuts all use the same save-before-navigation path. The current Gold entities (including relabels and deletions), status, and notes are synchronized to the working dataframe before the row changes. Arrow shortcuts are intentionally ignored while focus is inside an input, select box, text area, or editable field so normal cursor editing remains available.
+
+Changing a Gold label updates the row draft immediately. Left/Right arrow navigation also promotes a `NOT_ANNOTATED` record to `COMPLETED`; an existing `NEEDS_REVIEW` status is preserved. Leading and trailing whitespace from browser text selection is trimmed while offsets are adjusted, so the saved slicing invariant remains exact.
+
+For large datasets, the complete downloadable CSV is cached by annotation revision and shared by the header and sidebar download buttons. It is invalidated whenever annotations, labels, status, or notes change, so a fresh complete dataset remains downloadable after every save without serializing all rows twice on every Streamlit rerun. Temporary server snapshots are likewise copied only after state changes; ordinary redraws only refresh the 15-minute activity timestamp.
 
 ## Temporary refresh recovery
 

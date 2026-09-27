@@ -75,6 +75,10 @@ def init_state() -> None:
         "landing_warning": None,
         "pending_keyboard_navigation": None,
         "processed_keyboard_event": None,
+        "state_revision": 0,
+        "export_revision": 0,
+        "cached_export_revision": -1,
+        "cached_export_bytes": None,
     }
     for key, value in defaults.items():
         if key not in st.session_state:
@@ -83,6 +87,13 @@ def init_state() -> None:
 
 def active_labels() -> list[str]:
     return [*DEFAULT_LABELS, *st.session_state.custom_labels]
+
+
+def mark_state_changed(*, affects_export: bool = False) -> None:
+    """Version mutable state so expensive snapshots and CSV exports are rebuilt only when needed."""
+    st.session_state.state_revision += 1
+    if affects_export:
+        st.session_state.export_revision += 1
 
 
 def initialize_drafts(dataframe: pd.DataFrame) -> tuple[dict, list[str]]:
@@ -115,15 +126,18 @@ def initialize_drafts(dataframe: pd.DataFrame) -> tuple[dict, list[str]]:
     return drafts, warnings
 
 
-def sync_current_widgets(row_index: int) -> None:
+def sync_current_widgets(row_index: int) -> bool:
     """Copy rendered widget values into the row draft before any save/navigation."""
     draft = st.session_state.drafts[row_index]
     notes_key = f"notes_{row_index}"
     status_key = f"status_{row_index}"
-    if notes_key in st.session_state:
+    changed = False
+    if notes_key in st.session_state and draft["notes"] != st.session_state[notes_key]:
         draft["notes"] = st.session_state[notes_key]
-    if status_key in st.session_state:
+        changed = True
+    if status_key in st.session_state and draft["status"] != st.session_state[status_key]:
         draft["status"] = st.session_state[status_key]
+        changed = True
     labels = active_labels()
     for annotation_index, entity in enumerate(draft["entities"]):
         label_key = f"entity_label_{row_index}_{annotation_index}"
@@ -132,21 +146,30 @@ def sync_current_widgets(row_index: int) -> None:
             draft["entities"] = change_label(
                 draft["entities"], annotation_index, selected_label, labels
             )
+            changed = True
+    return changed
 
 
 def save_row(row_index: int, status: str | None = None) -> bool:
     frame = st.session_state.dataframe
     draft = st.session_state.drafts[row_index]
-    sync_current_widgets(row_index)
+    changed = sync_current_widgets(row_index)
     if status is not None:
+        changed = changed or draft["status"] != status
         draft["status"] = status
     errors = validate_entities(draft["entities"], str(frame.at[row_index, "clean_narrative"]), active_labels())
     if errors:
         st.error("Cannot save: " + " ".join(errors))
         return False
-    frame.at[row_index, "gold_entities_json"] = serialize_annotations(draft["entities"])
+    serialized = serialize_annotations(draft["entities"])
+    changed = changed or frame.at[row_index, "gold_entities_json"] != serialized
+    changed = changed or frame.at[row_index, "annotation_status"] != draft["status"]
+    changed = changed or frame.at[row_index, "annotator_notes"] != draft["notes"]
+    frame.at[row_index, "gold_entities_json"] = serialized
     frame.at[row_index, "annotation_status"] = draft["status"]
     frame.at[row_index, "annotator_notes"] = draft["notes"]
+    if changed:
+        mark_state_changed(affects_export=True)
     st.session_state.flash = f"Saved row {row_index + 1}."
     persist_web_session()
     return True
@@ -161,6 +184,17 @@ def export_with_drafts() -> pd.DataFrame:
             exported.at[row_index, "annotation_status"] = draft["status"]
             exported.at[row_index, "annotator_notes"] = draft["notes"]
     return exported
+
+
+def annotated_export_bytes() -> bytes:
+    """Return one cached complete export for both download buttons."""
+    if (
+        st.session_state.cached_export_bytes is None
+        or st.session_state.cached_export_revision != st.session_state.export_revision
+    ):
+        st.session_state.cached_export_bytes = export_dataset(export_with_drafts())
+        st.session_state.cached_export_revision = st.session_state.export_revision
+    return st.session_state.cached_export_bytes
 
 
 def persist_web_session() -> None:
@@ -178,7 +212,10 @@ def persist_web_session() -> None:
             "filter_state": st.session_state.filter_state,
             "drafts": st.session_state.drafts,
             "load_warnings": st.session_state.load_warnings,
+            "state_revision": st.session_state.state_revision,
+            "export_revision": st.session_state.export_revision,
         },
+        revision=st.session_state.state_revision,
     )
 
 
@@ -188,6 +225,9 @@ def restore_web_session(snapshot: dict, session_id: str) -> None:
         "filter_state", "drafts", "load_warnings",
     ):
         st.session_state[key] = snapshot[key]
+    # Sessions created before revisioned caching remain recoverable during a hot reload.
+    st.session_state.state_revision = int(snapshot.get("state_revision", 0))
+    st.session_state.export_revision = int(snapshot.get("export_revision", 0))
     st.session_state.web_session_id = session_id
     filters = snapshot.get("filter_state", {})
     st.session_state["status_filter"] = filters.get("statuses", [])
@@ -195,6 +235,8 @@ def restore_web_session(snapshot: dict, session_id: str) -> None:
     st.session_state["year_filter"] = filters.get("years", [])
     st.session_state["only_not_annotated"] = False
     st.session_state.flash = "Recovered the recent annotation session."
+    st.session_state.cached_export_revision = -1
+    st.session_state.cached_export_bytes = None
 
 
 def start_new_dataset() -> None:
@@ -209,6 +251,10 @@ def start_new_dataset() -> None:
         "load_warnings": [],
         "flash": None,
         "web_session_id": None,
+        "state_revision": 0,
+        "export_revision": 0,
+        "cached_export_revision": -1,
+        "cached_export_bytes": None,
     }.items():
         st.session_state[key] = value
     st.session_state.clear_browser_route = True
@@ -221,6 +267,7 @@ def save_and_navigate(step: int, indices: list[int], status: str | None = None) 
     if not save_row(current, status=status):
         return
     st.session_state.current_row_index = move(current, indices, step)
+    mark_state_changed()
     persist_web_session()
     st.rerun()
 
@@ -231,6 +278,7 @@ def save_and_jump(target_row_index: int) -> None:
     if not save_row(current):
         return
     st.session_state.current_row_index = target_row_index
+    mark_state_changed()
     persist_web_session()
     st.rerun()
 
@@ -288,7 +336,7 @@ if st.session_state.dataframe is not None:
     with top_download_slot:
         st.download_button(
             "Download Annotated Dataset",
-            export_dataset(export_with_drafts()),
+            annotated_export_bytes(),
             file_name=f"gold_pii_annotations_{top_download_timestamp}.csv",
             mime="text/csv",
             key="top_download_dataset",
@@ -315,6 +363,7 @@ if uploaded is not None:
         st.session_state.drafts, st.session_state.load_warnings = initialize_drafts(loaded)
         remaining = loaded.index[loaded["annotation_status"] == "NOT_ANNOTATED"].tolist()
         st.session_state.current_row_index = remaining[0] if remaining else 0
+        mark_state_changed(affects_export=True)
         session_id = create_session_id(identity)
         st.session_state.web_session_id = session_id
         st.query_params["session"] = session_id
@@ -364,9 +413,12 @@ with st.sidebar:
     year_options = sorted(df["year"].astype(str).unique()) if "year" in df else []
     selected_sources = st.multiselect("Source class", source_options, key="source_filter")
     selected_years = st.multiselect("Year", year_options, key="year_filter")
-    st.session_state.filter_state = {
+    new_filter_state = {
         "statuses": selected_statuses, "source_classes": selected_sources, "years": selected_years
     }
+    if new_filter_state != st.session_state.filter_state:
+        st.session_state.filter_state = new_filter_state
+        mark_state_changed()
 
 indices = filtered_indices(df, **st.session_state.filter_state)
 if not indices:
@@ -374,6 +426,7 @@ if not indices:
     st.stop()
 if st.session_state.current_row_index not in indices:
     st.session_state.current_row_index = indices[0]
+    mark_state_changed()
 
 with st.sidebar:
     st.header("Navigation")
@@ -394,6 +447,7 @@ with st.sidebar:
     if st.button("Add label", width="stretch"):
         try:
             st.session_state.custom_labels = add_custom_label(st.session_state.custom_labels, custom_value)
+            mark_state_changed(affects_export=True)
             st.success(f"Added {st.session_state.custom_labels[-1]}")
             persist_web_session()
             st.rerun()
@@ -403,7 +457,7 @@ with st.sidebar:
     st.header("Downloads")
     timestamp = datetime.now().strftime("%Y%m%d_%H%M")
     st.download_button(
-        "Download Annotated Dataset", export_dataset(export_with_drafts()),
+        "Download Annotated Dataset", annotated_export_bytes(),
         file_name=f"gold_pii_annotations_{timestamp}.csv", mime="text/csv", width="stretch",
         key="sidebar_download_dataset",
     )
@@ -486,6 +540,7 @@ with gold_column:
                 "end_char": trimmed_start + len(trimmed_selection_text),
             }
             draft["entities"] = add_annotation(draft["entities"], entity, narrative, active_labels())
+            mark_state_changed(affects_export=True)
             st.session_state[f"processed_selection_{row_index}"] = current_selection.get("selection_id")
             st.session_state.pop(f"selection_{row_index}", None)
             persist_web_session()
@@ -507,8 +562,10 @@ with gold_column:
         )
         if new_label != entity["label"]:
             draft["entities"] = change_label(draft["entities"], annotation_index, new_label, active_labels())
+            mark_state_changed(affects_export=True)
         if cols[2].button("Delete", key=f"delete_{row_index}_{annotation_index}", width="stretch"):
             draft["entities"] = delete_annotation(draft["entities"], annotation_index)
+            mark_state_changed(affects_export=True)
             persist_web_session()
             st.rerun()
 
@@ -516,10 +573,14 @@ with weak_column:
     render_weak_entities(row["weak_pii_entities_json"])
 
 st.subheader("Annotator Notes")
-draft["notes"] = st.text_area("Notes", value=draft["notes"], key=f"notes_{row_index}", label_visibility="collapsed")
-draft["status"] = st.selectbox(
+notes_value = st.text_area("Notes", value=draft["notes"], key=f"notes_{row_index}", label_visibility="collapsed")
+status_value = st.selectbox(
     "Annotation status", VALID_STATUSES, index=VALID_STATUSES.index(draft["status"]), key=f"status_{row_index}"
 )
+if notes_value != draft["notes"] or status_value != draft["status"]:
+    draft["notes"] = notes_value
+    draft["status"] = status_value
+    mark_state_changed(affects_export=True)
 persist_web_session()
 
 buttons = st.columns(6)

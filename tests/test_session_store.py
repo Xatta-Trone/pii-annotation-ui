@@ -28,3 +28,18 @@ def test_prune_expired_sessions():
     }
     assert prune_expired_sessions(store, ttl_seconds=100, now=1000.0) == ["old"]
     assert list(store) == ["fresh"]
+
+
+def test_unchanged_revision_only_refreshes_activity_timestamp():
+    store = {}
+    save_session(store, "key", {"value": "saved"}, now=10.0, revision=1)
+    original_snapshot = store["key"]["snapshot"]
+
+    save_session(store, "key", {"value": "should not replace"}, now=20.0, revision=1)
+    assert store["key"]["last_activity"] == 20.0
+    assert store["key"]["snapshot"] is original_snapshot
+    assert restore_session(store, "key", now=21.0) == {"value": "saved"}
+
+    save_session(store, "key", {"value": "updated"}, now=30.0, revision=2)
+    assert store["key"]["snapshot"] is not original_snapshot
+    assert restore_session(store, "key", now=31.0) == {"value": "updated"}

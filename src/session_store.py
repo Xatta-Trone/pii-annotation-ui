@@ -37,10 +37,19 @@ def save_session(
     session_id: str,
     snapshot: dict[str, Any],
     now: float | None = None,
+    revision: int | None = None,
 ) -> None:
+    last_activity = time.time() if now is None else now
+    existing = store.get(session_id)
+    if existing is not None and revision is not None and existing.get("revision") == revision:
+        # Most Streamlit reruns only redraw widgets. Keep the existing immutable
+        # snapshot and refresh its TTL instead of copying a potentially huge frame.
+        existing["last_activity"] = last_activity
+        return
     store[session_id] = {
-        "last_activity": time.time() if now is None else now,
+        "last_activity": last_activity,
         "snapshot": copy.deepcopy(snapshot),
+        "revision": revision,
     }
 
 
