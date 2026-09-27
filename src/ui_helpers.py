@@ -14,19 +14,33 @@ def scalar(value, fallback="—") -> str:
 
 def render_weak_entities(value) -> tuple[list, str | None]:
     entities, error = parse_json_list(value, "weak_pii_entities_json")
-    st.subheader("Weak PII Entities — Reference Only")
-    st.caption("These candidates are not gold annotations and are never accepted automatically.")
+    st.subheader("Weak PII Reference")
+    st.caption("Reference information only — weak entities are never automatically accepted or copied into Gold.")
     if error:
         st.warning(error)
     elif not entities:
-        st.info("No weak PII entities detected.")
+        st.info("No weak PII reference available. The narrative still requires independent human review.")
     else:
-        rows = []
-        for entity in entities:
-            if isinstance(entity, dict):
-                rows.append({"Text": entity.get("text", ""), "Start": entity.get("start", ""), "End": entity.get("end", "")})
-        st.dataframe(rows, width="stretch", hide_index=True)
+        with st.container(border=True):
+            for entity in entities:
+                if isinstance(entity, dict):
+                    text = html.escape(str(entity.get("text", "")))
+                    start = html.escape(str(entity.get("start", "")))
+                    end = html.escape(str(entity.get("end", "")))
+                    st.markdown(f"- **{text}** `({start}, {end})`")
     return entities, error
+
+
+def render_redacted_narrative(value) -> None:
+    st.subheader("Cleaned Redacted Narrative")
+    text = "" if value is None else str(value)
+    st.caption("Comparison reference only. Gold offsets always use the Clean Narrative.")
+    st.code(
+        text or "No cleaned redacted narrative available for this record.",
+        language=None,
+        wrap_lines=True,
+        height=258,
+    )
 
 
 def display_selection(selection: dict | None):

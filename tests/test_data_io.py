@@ -19,3 +19,17 @@ def test_tsv_round_trip():
     reloaded = load_dataset(export_dataset(frame, separator="\t"), "output.tsv")
     assert reloaded.loc[0, "crash_id"] == "001"
     assert reloaded.loc[0, "clean_narrative"] == "Text"
+
+
+def test_new_gold_columns_are_preserved_and_empty_weak_does_not_complete_row():
+    raw = (
+        "crash_id,clean_narrative,clean_redactedNarrative,weak_pii_entities_json,"
+        "annotation_status,gold_entities_json,annotator_notes,adjudication_status,adjudication_notes\n"
+        "1,Human name appears,[REDACTED],[],NOT_ANNOTATED,,,,\n"
+    ).encode("utf-8")
+    frame = load_dataset(raw, "gold.csv")
+    assert frame.loc[0, "clean_redactedNarrative"] == "[REDACTED]"
+    assert frame.loc[0, "weak_pii_entities_json"] == "[]"
+    assert frame.loc[0, "annotation_status"] == "NOT_ANNOTATED"
+    assert "adjudication_status" in frame.columns
+    assert "adjudication_notes" in frame.columns

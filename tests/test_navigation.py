@@ -9,3 +9,9 @@ def test_filter_uses_original_indices_and_navigation():
     assert move(1, indices, 1) == 2
     assert find_crash_id(frame, "8") == 1
 
+
+def test_navigation_clamps_at_first_and_last_filtered_record():
+    indices = [2, 5, 9]
+    assert move(2, indices, -1) == 2
+    assert move(9, indices, 1) == 9
+

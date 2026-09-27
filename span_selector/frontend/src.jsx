@@ -17,12 +17,35 @@ function segments(text, annotations) {
   return result;
 }
 
+function highlightedRedactions(text) {
+  return String(text || "").split(/(xxx)/gi).map((part, index) =>
+    part.toLowerCase() === "xxx"
+      ? <mark className="redaction-token" key={index}>{part}</mark>
+      : part
+  );
+}
+
 function Selector({args}) {
   const rootRef = useRef(null);
+  const redactedRef = useRef(null);
+  const synchronizingScroll = useRef(false);
   const parts = useMemo(() => segments(args.text || "", args.annotations || []), [args.text, args.annotations]);
   useEffect(() => {
-    Streamlit.setFrameHeight((rootRef.current?.scrollHeight || 160) + 42);
+    Streamlit.setFrameHeight((rootRef.current?.parentElement?.scrollHeight || 280) + 4);
   }, [parts]);
+  useEffect(() => {
+    function navigate(event) {
+      if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+      event.preventDefault();
+      Streamlit.setComponentValue({
+        event_type: "navigation",
+        direction: event.key === "ArrowRight" ? "next" : "previous",
+        event_id: `${Date.now()}-${Math.random()}`,
+      });
+    }
+    document.addEventListener("keydown", navigate);
+    return () => document.removeEventListener("keydown", navigate);
+  }, []);
 
   function offsetWithin(root, node, offset) {
     const range = document.createRange();
@@ -42,17 +65,40 @@ function Selector({args}) {
     const lo = Math.min(start, end), hi = Math.max(start, end);
     if (lo === hi) return;
     Streamlit.setComponentValue({
+      event_type: "selection",
       text: Array.from(args.text || "").slice(lo, hi).join(""), start_char: lo, end_char: hi,
       selection_id: `${Date.now()}-${Math.random()}`
     });
   }
 
-  return <div>
-    <div className="hint">Drag across the exact text to select it. Existing gold spans are highlighted.</div>
-    <div className="narrative" ref={rootRef} onMouseUp={selected}>
-      {parts.map((part, i) => part.label
-        ? <mark key={i} title={`${part.label} [${part.index}]`}>{part.text}</mark>
-        : <React.Fragment key={i}>{part.text}</React.Fragment>)}
+  function synchronizeScroll(source, target) {
+    if (!source || !target || synchronizingScroll.current) return;
+    synchronizingScroll.current = true;
+    const sourceRange = Math.max(0, source.scrollHeight - source.clientHeight);
+    const targetRange = Math.max(0, target.scrollHeight - target.clientHeight);
+    const progress = sourceRange ? source.scrollTop / sourceRange : 0;
+    target.scrollTop = progress * targetRange;
+    requestAnimationFrame(() => { synchronizingScroll.current = false; });
+  }
+
+  return <div className="narrative-grid">
+    <div>
+      <div className="hint">Drag across the exact text to select it. Existing gold spans are highlighted.</div>
+      <div className="narrative" ref={rootRef} onMouseUp={selected}
+        onScroll={() => synchronizeScroll(rootRef.current, redactedRef.current)}>
+        {parts.map((part, i) => part.label
+          ? <mark key={i} title={`${part.label} [${part.index}]`}>{part.text}</mark>
+          : <React.Fragment key={i}>{part.text}</React.Fragment>)}
+      </div>
+    </div>
+    <div>
+      <div className="hint">Comparison reference only. Gold offsets always use the Clean Narrative above.</div>
+      <div className="redacted" ref={redactedRef}
+        onScroll={() => synchronizeScroll(redactedRef.current, rootRef.current)}>
+        {highlightedRedactions(
+          args.redacted_text || "No cleaned redacted narrative available for this record."
+        )}
+      </div>
     </div>
   </div>;
 }
@@ -93,8 +139,33 @@ function SessionRouter({args}) {
   return null;
 }
 
+function KeyboardNavigation() {
+  useEffect(() => {
+    Streamlit.setFrameHeight(0);
+    function navigate(event) {
+      const target = event.target;
+      const tag = (target?.tagName || "").toLowerCase();
+      const isEditing = target?.isContentEditable || ["input", "textarea", "select"].includes(tag);
+      if (isEditing || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
+      if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+      event.preventDefault();
+      Streamlit.setComponentValue({
+        direction: event.key === "ArrowRight" ? "next" : "previous",
+        event_id: `${Date.now()}-${Math.random()}`,
+      });
+    }
+    let targetDocument = document;
+    try { targetDocument = window.parent.document; } catch (_) {}
+    targetDocument.addEventListener("keydown", navigate);
+    return () => targetDocument.removeEventListener("keydown", navigate);
+  }, []);
+  return null;
+}
+
 function Component({args}) {
-  return args.mode === "session_router" ? <SessionRouter args={args} /> : <Selector args={args} />;
+  if (args.mode === "session_router") return <SessionRouter args={args} />;
+  if (args.mode === "keyboard_navigation") return <KeyboardNavigation />;
+  return <Selector args={args} />;
 }
 
 const Connected = withStreamlitConnection(Component);

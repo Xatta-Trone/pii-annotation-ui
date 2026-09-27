@@ -8,9 +8,16 @@ _component = components.declare_component(
 )
 
 
-def span_selector(text: str, annotations: list[dict], key: str):
+def span_selector(text: str, annotations: list[dict], key: str, redacted_text: str = ""):
     """Render selectable text and return exact browser selection offsets."""
-    return _component(mode="span_selector", text=text, annotations=annotations, key=key, default=None)
+    return _component(
+        mode="span_selector",
+        text=text,
+        redacted_text=redacted_text,
+        annotations=annotations,
+        key=key,
+        default=None,
+    )
 
 
 def session_router(current_session: str | None, reset: bool, ttl_seconds: int, key: str):
@@ -23,3 +30,8 @@ def session_router(current_session: str | None, reset: bool, ttl_seconds: int, k
         key=key,
         default=None,
     )
+
+
+def keyboard_navigation(key: str):
+    """Return left/right arrow navigation events captured on the Streamlit page."""
+    return _component(mode="keyboard_navigation", key=key, default=None)

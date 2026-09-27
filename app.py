@@ -6,7 +6,8 @@ from datetime import datetime
 import pandas as pd
 import streamlit as st
 
-from span_selector import session_router, span_selector
+from span_selector import _component as span_selector_component
+from span_selector import keyboard_navigation, session_router
 from src.annotations import AnnotationError, add_annotation, change_label, delete_annotation, serialize_annotations
 from src.config import DEFAULT_LABELS, VALID_STATUSES
 from src.data_io import export_dataset, file_identity, load_dataset
@@ -24,6 +25,16 @@ from src.validation import parse_json_list, validate_entities, validate_span
 
 
 st.set_page_config(page_title="Gold PII Annotation Tool", page_icon="🔒", layout="wide")
+st.markdown(
+    """
+    <style>
+    [data-testid="stMainBlockContainer"] {
+        padding-top: 2rem;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
 
 
 @st.cache_resource
@@ -46,6 +57,8 @@ def init_state() -> None:
         "clear_browser_route": False,
         "processed_router_event": None,
         "landing_warning": None,
+        "pending_keyboard_navigation": None,
+        "processed_keyboard_event": None,
     }
     for key, value in defaults.items():
         if key not in st.session_state:
@@ -86,9 +99,29 @@ def initialize_drafts(dataframe: pd.DataFrame) -> tuple[dict, list[str]]:
     return drafts, warnings
 
 
+def sync_current_widgets(row_index: int) -> None:
+    """Copy rendered widget values into the row draft before any save/navigation."""
+    draft = st.session_state.drafts[row_index]
+    notes_key = f"notes_{row_index}"
+    status_key = f"status_{row_index}"
+    if notes_key in st.session_state:
+        draft["notes"] = st.session_state[notes_key]
+    if status_key in st.session_state:
+        draft["status"] = st.session_state[status_key]
+    labels = active_labels()
+    for annotation_index, entity in enumerate(draft["entities"]):
+        label_key = f"entity_label_{row_index}_{annotation_index}"
+        selected_label = st.session_state.get(label_key)
+        if selected_label in labels and selected_label != entity["label"]:
+            draft["entities"] = change_label(
+                draft["entities"], annotation_index, selected_label, labels
+            )
+
+
 def save_row(row_index: int, status: str | None = None) -> bool:
     frame = st.session_state.dataframe
     draft = st.session_state.drafts[row_index]
+    sync_current_widgets(row_index)
     if status is not None:
         draft["status"] = status
     errors = validate_entities(draft["entities"], str(frame.at[row_index, "clean_narrative"]), active_labels())
@@ -166,8 +199,22 @@ def start_new_dataset() -> None:
     st.query_params.clear()
 
 
-def navigate(step: int, indices: list[int]) -> None:
-    st.session_state.current_row_index = move(st.session_state.current_row_index, indices, step)
+def save_and_navigate(step: int, indices: list[int], status: str | None = None) -> None:
+    """Single navigation path used by buttons and keyboard shortcuts."""
+    current = st.session_state.current_row_index
+    if not save_row(current, status=status):
+        return
+    st.session_state.current_row_index = move(current, indices, step)
+    persist_web_session()
+    st.rerun()
+
+
+def save_and_jump(target_row_index: int) -> None:
+    """Save the complete current draft before a direct row/crash-ID jump."""
+    current = st.session_state.current_row_index
+    if not save_row(current):
+        return
+    st.session_state.current_row_index = target_row_index
     persist_web_session()
     st.rerun()
 
@@ -175,7 +222,14 @@ def navigate(step: int, indices: list[int]) -> None:
 init_state()
 WEB_SESSION_STORE = get_web_session_store()
 prune_expired_sessions(WEB_SESSION_STORE)
-st.title("Gold PII Annotation Tool")
+title_column, _, download_column = st.columns(
+    [3, 2, 1.6],
+    vertical_alignment="center",
+)
+with title_column:
+    st.title("Gold PII Annotation Tool")
+with download_column:
+    top_download_slot = st.empty()
 
 url_session_id = str(st.query_params.get("session", "")) or None
 router_event = session_router(
@@ -213,7 +267,21 @@ if st.session_state.dataframe is None and url_session_id:
         st.session_state.landing_warning = "This annotation URL has expired or is no longer available."
         st.rerun()
 
-uploaded = st.file_uploader("Upload crash-narrative dataset", type=["csv", "tsv"])
+if st.session_state.dataframe is not None:
+    top_download_timestamp = datetime.now().strftime("%Y%m%d_%H%M")
+    with top_download_slot:
+        st.download_button(
+            "Download Annotated Dataset",
+            export_dataset(export_with_drafts()),
+            file_name=f"gold_pii_annotations_{top_download_timestamp}.csv",
+            mime="text/csv",
+            key="top_download_dataset",
+            width="stretch",
+        )
+
+uploaded = None
+if st.session_state.dataframe is None:
+    uploaded = st.file_uploader("Upload crash-narrative dataset", type=["csv", "tsv"])
 if uploaded is not None:
     content = uploaded.getvalue()
     identity = file_identity(uploaded.name, content)
@@ -295,15 +363,11 @@ with st.sidebar:
     st.header("Navigation")
     row_number = st.number_input("Jump to row", min_value=1, max_value=len(df), value=st.session_state.current_row_index + 1)
     if st.button("Go to row", width="stretch"):
-        st.session_state.current_row_index = jump_to_row(int(row_number), len(df))
-        persist_web_session()
-        st.rerun()
+        save_and_jump(jump_to_row(int(row_number), len(df)))
     crash_target = st.text_input("Jump to crash ID")
     if st.button("Go to crash ID", width="stretch"):
         try:
-            st.session_state.current_row_index = find_crash_id(df, crash_target)
-            persist_web_session()
-            st.rerun()
+            save_and_jump(find_crash_id(df, crash_target))
         except ValueError as exc:
             st.error(str(exc))
 
@@ -325,6 +389,7 @@ with st.sidebar:
     st.download_button(
         "Download Annotated Dataset", export_dataset(export_with_drafts()),
         file_name=f"gold_pii_annotations_{timestamp}.csv", mime="text/csv", width="stretch",
+        key="sidebar_download_dataset",
     )
     st.download_button(
         "Download Label Schema", label_schema_json(st.session_state.custom_labels),
@@ -357,49 +422,74 @@ header[4].metric("Character Count", scalar(row.get("char_count"), str(len(narrat
 weak_items, _ = parse_json_list(row["weak_pii_entities_json"], "weak")
 header[5].metric("Weak PII Count", len(weak_items))
 
-st.subheader("Narrative annotation interface")
-selection = span_selector(narrative, draft["entities"], key=f"selector_{row_index}")
+clean_column, redacted_column = st.columns(2, gap="large")
+with clean_column:
+    st.subheader("Clean Narrative")
+with redacted_column:
+    st.subheader("Cleaned Redacted Narrative")
+redacted_narrative = str(row.get("clean_redactedNarrative", "") or "")
+selection = span_selector_component(
+    mode="span_selector",
+    text=narrative,
+    annotations=draft["entities"],
+    redacted_text=redacted_narrative,
+    key=f"selector_{row_index}",
+    default=None,
+)
 processed_selection = st.session_state.get(f"processed_selection_{row_index}")
-if selection and selection.get("selection_id") != processed_selection:
+if selection and selection.get("event_type") == "navigation":
+    if selection.get("event_id") != st.session_state.processed_keyboard_event:
+        st.session_state.pending_keyboard_navigation = selection
+elif selection and selection.get("selection_id") != processed_selection:
     st.session_state[f"selection_{row_index}"] = selection
 current_selection = st.session_state.get(f"selection_{row_index}")
-display_selection(current_selection)
-add_columns = st.columns([3, 1])
-selected_label = add_columns[0].selectbox("PII label", active_labels(), key=f"add_label_{row_index}")
-if add_columns[1].button("Add annotation", type="primary", width="stretch", disabled=not current_selection):
-    try:
-        entity = {
-            "text": current_selection["text"], "label": selected_label,
-            "start_char": int(current_selection["start_char"]), "end_char": int(current_selection["end_char"]),
-        }
-        draft["entities"] = add_annotation(draft["entities"], entity, narrative, active_labels())
-        st.session_state[f"processed_selection_{row_index}"] = current_selection.get("selection_id")
-        st.session_state.pop(f"selection_{row_index}", None)
-        persist_web_session()
-        st.rerun()
-    except (AnnotationError, KeyError, TypeError, ValueError) as exc:
-        st.error(str(exc))
-
-st.subheader("Gold Annotations")
-if not draft["entities"]:
-    st.info("No gold annotations for this record.")
-for annotation_index, entity in enumerate(list(draft["entities"])):
-    cols = st.columns([3, 2, 1, 1, 1])
-    cols[0].write(entity["text"])
-    new_label = cols[1].selectbox(
-        "Label", active_labels(), index=active_labels().index(entity["label"]),
-        key=f"entity_label_{row_index}_{annotation_index}", label_visibility="collapsed",
+gold_column, weak_column = st.columns(2, gap="large")
+with gold_column:
+    st.subheader("Gold Annotation Controls")
+    display_selection(current_selection)
+    st.markdown("PII label")
+    add_columns = st.columns([2, 1])
+    selected_label = add_columns[0].selectbox(
+        "PII label",
+        active_labels(),
+        key=f"add_label_{row_index}",
+        label_visibility="collapsed",
     )
-    cols[2].write(str(entity["start_char"]))
-    cols[3].write(str(entity["end_char"]))
-    if new_label != entity["label"]:
-        draft["entities"] = change_label(draft["entities"], annotation_index, new_label, active_labels())
-    if cols[4].button("Delete", key=f"delete_{row_index}_{annotation_index}"):
-        draft["entities"] = delete_annotation(draft["entities"], annotation_index)
-        persist_web_session()
-        st.rerun()
+    if add_columns[1].button("Add annotation", type="primary", width="stretch", disabled=not current_selection):
+        try:
+            entity = {
+                "text": current_selection["text"], "label": selected_label,
+                "start_char": int(current_selection["start_char"]), "end_char": int(current_selection["end_char"]),
+            }
+            draft["entities"] = add_annotation(draft["entities"], entity, narrative, active_labels())
+            st.session_state[f"processed_selection_{row_index}"] = current_selection.get("selection_id")
+            st.session_state.pop(f"selection_{row_index}", None)
+            persist_web_session()
+            st.rerun()
+        except (AnnotationError, KeyError, TypeError, ValueError) as exc:
+            st.error(str(exc))
 
-render_weak_entities(row["weak_pii_entities_json"])
+    st.subheader("Gold Annotations")
+    if not draft["entities"]:
+        st.info("No gold annotations for this record.")
+    for annotation_index, entity in enumerate(list(draft["entities"])):
+        cols = st.columns([3, 2, 1])
+        cols[0].write(
+            f'{entity["text"]} ({entity["start_char"]}, {entity["end_char"]})'
+        )
+        new_label = cols[1].selectbox(
+            "Label", active_labels(), index=active_labels().index(entity["label"]),
+            key=f"entity_label_{row_index}_{annotation_index}", label_visibility="collapsed",
+        )
+        if new_label != entity["label"]:
+            draft["entities"] = change_label(draft["entities"], annotation_index, new_label, active_labels())
+        if cols[2].button("Delete", key=f"delete_{row_index}_{annotation_index}", width="stretch"):
+            draft["entities"] = delete_annotation(draft["entities"], annotation_index)
+            persist_web_session()
+            st.rerun()
+
+with weak_column:
+    render_weak_entities(row["weak_pii_entities_json"])
 
 st.subheader("Annotator Notes")
 draft["notes"] = st.text_area("Notes", value=draft["notes"], key=f"notes_{row_index}", label_visibility="collapsed")
@@ -410,20 +500,35 @@ persist_web_session()
 
 buttons = st.columns(6)
 if buttons[0].button("Previous", width="stretch"):
-    navigate(-1, indices)
+    save_and_navigate(-1, indices)
 if buttons[1].button("Save", width="stretch"):
     if save_row(row_index):
         st.rerun()
 if buttons[2].button("Save & Next", width="stretch"):
-    if save_row(row_index):
-        navigate(1, indices)
+    save_and_navigate(1, indices)
 if buttons[3].button("Mark Completed & Next", type="primary", width="stretch"):
-    if save_row(row_index, "COMPLETED"):
-        navigate(1, indices)
+    save_and_navigate(1, indices, status="COMPLETED")
 if buttons[4].button("Mark Needs Review", width="stretch"):
     if save_row(row_index, "NEEDS_REVIEW"):
         st.rerun()
 if buttons[5].button("Next", width="stretch"):
-    navigate(1, indices)
+    save_and_navigate(1, indices)
+
+page_keyboard_event = keyboard_navigation(key="page_keyboard_navigation")
+if (
+    page_keyboard_event
+    and page_keyboard_event.get("event_id") != st.session_state.processed_keyboard_event
+):
+    st.session_state.pending_keyboard_navigation = page_keyboard_event
+
+pending_navigation = st.session_state.pending_keyboard_navigation
+if (
+    pending_navigation
+    and pending_navigation.get("event_id") != st.session_state.processed_keyboard_event
+):
+    st.session_state.processed_keyboard_event = pending_navigation.get("event_id")
+    st.session_state.pending_keyboard_navigation = None
+    direction = pending_navigation.get("direction")
+    save_and_navigate(1 if direction == "next" else -1, indices)
 
 st.caption("Offsets use Python slicing semantics (start inclusive, end exclusive). Character offsets are the canonical gold positions.")

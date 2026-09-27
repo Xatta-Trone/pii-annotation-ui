@@ -1,5 +1,6 @@
-crash_id,year,source_class,word_count,char_count,clean_narrative,weak_pii_entities_json,annotation_status,gold_entities_json,annotator_notes,gold_reserve_type,gold_reserve_version
-SYN-001,2025,SYNTHETIC,6,42,The driver John Smith called 801-555-1234.,"[{""text"":""John Smith"",""start"":11,""end"":21}]",NOT_ANNOTATED,,,synthetic,v1
-SYN-002,2025,SYNTHETIC,10,66,John Smith spoke with staff. Later John Smith left the facility.,[],NOT_ANNOTATED,,,synthetic,v1
-SYN-003,2025,SYNTHETIC,5,27,"First line
-José reported no injuries.",[],COMPLETED,[],Confirmed no PII.,synthetic,v1
+crash_id,year,source_class,xxx_count,word_count,char_count,clean_narrative,clean_redactedNarrative,weak_pii_entities_json,annotation_status,gold_entities_json,annotator_notes,adjudication_status,adjudication_notes,gold_reserve_type,gold_reserve_version
+SYN-001,2025,SYNTHETIC,2,6,42,The driver John Smith called 801-555-1234.,The driver [REDACTED] called [REDACTED].,"[{""text"":""John Smith"",""start"":11,""end"":21}]",NOT_ANNOTATED,,,,,synthetic,v1
+SYN-002,2025,SYNTHETIC,0,10,66,John Smith spoke with staff. Later John Smith left the facility.,[REDACTED] spoke with staff. Later [REDACTED] left the facility.,[],NOT_ANNOTATED,,,,,synthetic,v1
+SYN-003,2025,SYNTHETIC,0,5,37,"First line
+José reported no injuries.","First line
+José reported no injuries.",[],COMPLETED,[],Confirmed no PII.,,,synthetic,v1
