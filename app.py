@@ -553,6 +553,15 @@ if (
     st.session_state.processed_keyboard_event = pending_navigation.get("event_id")
     st.session_state.pending_keyboard_navigation = None
     direction = pending_navigation.get("direction")
-    save_and_navigate(1 if direction == "next" else -1, indices)
+    current_status = st.session_state.get(
+        f"status_{row_index}",
+        draft["status"],
+    )
+    keyboard_status = "COMPLETED" if current_status == "NOT_ANNOTATED" else None
+    save_and_navigate(
+        1 if direction == "next" else -1,
+        indices,
+        status=keyboard_status,
+    )
 
 st.caption("Offsets use Python slicing semantics (start inclusive, end exclusive). Character offsets are the canonical gold positions.")
