@@ -8,6 +8,7 @@ import streamlit as st
 
 from span_selector import _component as span_selector_component
 from src.annotations import AnnotationError, add_annotation, change_label, delete_annotation, serialize_annotations
+from src.auth import ACCESS_CODE_ENV_VAR, access_code_matches, load_access_code
 from src.config import DEFAULT_LABELS, VALID_STATUSES
 from src.data_io import export_dataset, file_identity, load_dataset
 from src.label_manager import add_custom_label, label_schema_json, recover_custom_labels
@@ -79,6 +80,7 @@ def init_state() -> None:
         "export_revision": 0,
         "cached_export_revision": -1,
         "cached_export_bytes": None,
+        "authenticated": False,
     }
     for key, value in defaults.items():
         if key not in st.session_state:
@@ -87,6 +89,32 @@ def init_state() -> None:
 
 def active_labels() -> list[str]:
     return [*DEFAULT_LABELS, *st.session_state.custom_labels]
+
+
+def require_authentication() -> None:
+    """Stop before any annotation data or URL session is accessed unless authenticated."""
+    if st.session_state.authenticated:
+        return
+
+    st.title("Gold PII Annotation Tool")
+    st.subheader("Restricted access")
+    expected_code = load_access_code()
+    if expected_code is None:
+        st.error(
+            f"Access is not configured. Set {ACCESS_CODE_ENV_VAR} in the app's .env file "
+            "or hosting environment."
+        )
+        st.stop()
+
+    with st.form("access_code_form", clear_on_submit=True):
+        provided_code = st.text_input("Access code", type="password", autocomplete="off")
+        submitted = st.form_submit_button("Continue", type="primary", width="stretch")
+    if submitted:
+        if access_code_matches(provided_code, expected_code):
+            st.session_state.authenticated = True
+            st.rerun()
+        st.error("Incorrect access code.")
+    st.stop()
 
 
 def mark_state_changed(*, affects_export: bool = False) -> None:
@@ -284,6 +312,7 @@ def save_and_jump(target_row_index: int) -> None:
 
 
 init_state()
+require_authentication()
 WEB_SESSION_STORE = get_web_session_store()
 prune_expired_sessions(WEB_SESSION_STORE)
 title_column, _, download_column = st.columns(
@@ -382,6 +411,10 @@ df: pd.DataFrame = st.session_state.dataframe
 
 # Sidebar filters and dashboard
 with st.sidebar:
+    if st.button("Log out", width="stretch"):
+        st.session_state.authenticated = False
+        st.rerun()
+    st.divider()
     st.caption(f"Temporary session: `{st.session_state.web_session_id}`")
     st.caption("Automatically recoverable for 15 minutes after the last activity.")
     if st.button("Start / Upload New Dataset", width="stretch"):

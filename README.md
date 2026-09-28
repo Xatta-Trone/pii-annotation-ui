@@ -8,8 +8,18 @@ A local Streamlit application for creating character-exact, human-verified PII a
 python -m venv .venv
 .venv\Scripts\activate
 pip install -r requirements.txt
+Copy-Item .env.example .env
+# Edit .env and replace the placeholder access code.
 streamlit run app.py
 ```
+
+The application is protected by an access-code gate. Configure a long, random code in the untracked `.env` file:
+
+```dotenv
+PII_ANNOTATION_ACCESS_CODE=your-private-access-code
+```
+
+The same environment variable can be configured directly in the hosting environment. The app refuses to expose the upload or annotation interface when the variable is missing. Authentication lasts for the current Streamlit browser session, and **Log out** is available in the sidebar. The actual access code is never stored in the dataframe, URL, browser storage, or repository. `.env.example` is safe to commit; `.env` is ignored by Git.
 
 The compiled custom span selector is included. To rebuild it after editing its JavaScript:
 
