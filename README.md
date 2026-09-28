@@ -16,10 +16,12 @@ streamlit run app.py
 The application is protected by an access-code gate. Configure a long, random code in the untracked `.env` file:
 
 ```dotenv
-PII_ANNOTATION_ACCESS_CODE=your-private-access-code
+PII_ANNOTATION_ACCESS_CODE=FIRST-ACCESS-CODE,SECOND-ACCESS-CODE
 ```
 
-The same environment variable can be configured directly in the hosting environment. The app refuses to expose the upload or annotation interface when the variable is missing. Authentication lasts for the current Streamlit browser session, and **Log out** is available in the sidebar. The actual access code is never stored in the dataframe, URL, browser storage, or repository. `.env.example` is safe to commit; `.env` is ignored by Git.
+One or more codes may be configured in the same variable, separated by commas. Spaces surrounding each comma are ignored, empty entries are discarded, and each entered code is otherwise matched exactly and case-sensitively. For Streamlit Cloud, use valid TOML such as `PII_ANNOTATION_ACCESS_CODE = "FIRST-ACCESS-CODE,SECOND-ACCESS-CODE"`.
+
+The same environment variable can be configured directly in the hosting environment. The app refuses to expose the upload or annotation interface when no usable code is configured. Authentication lasts for the current Streamlit browser session, and **Log out** is available in the sidebar. Access codes are never stored in the dataframe, URL, browser storage, or repository. `.env.example` is safe to commit; `.env` is ignored by Git.
 
 The compiled custom span selector is included. To rebuild it after editing its JavaScript:
 

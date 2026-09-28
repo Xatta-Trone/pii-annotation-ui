@@ -98,8 +98,13 @@ def require_authentication() -> None:
 
     st.title("Gold PII Annotation Tool")
     st.subheader("Restricted access")
-    expected_code = load_access_code()
-    if expected_code is None:
+    # Parse here through the original auth API name so Streamlit hot reloads can
+    # coexist with an older src.auth module already cached by the process.
+    raw_access_codes = load_access_code()
+    expected_codes = tuple(
+        code.strip() for code in (raw_access_codes or "").split(",") if code.strip()
+    )
+    if not expected_codes:
         st.error(
             f"Access is not configured. Set {ACCESS_CODE_ENV_VAR} in the app's .env file "
             "or hosting environment."
@@ -110,7 +115,10 @@ def require_authentication() -> None:
         provided_code = st.text_input("Access code", type="password", autocomplete="off")
         submitted = st.form_submit_button("Continue", type="primary", width="stretch")
     if submitted:
-        if access_code_matches(provided_code, expected_code):
+        matched = False
+        for expected_code in expected_codes:
+            matched |= access_code_matches(provided_code, expected_code)
+        if matched:
             st.session_state.authenticated = True
             st.rerun()
         st.error("Incorrect access code.")
