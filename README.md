@@ -27,11 +27,14 @@ The application is protected by an access-code gate. Configure a long, random co
 
 ```dotenv
 PII_ANNOTATION_ACCESS_CODE=FIRST-ACCESS-CODE,SECOND-ACCESS-CODE
+PII_ANNOTATION_SESSION_TTL_MINUTES=15
 ```
 
 One or more codes may be configured in the same variable, separated by commas. Spaces surrounding each comma are ignored, empty entries are discarded, and each entered code is otherwise matched exactly and case-sensitively. For Streamlit Cloud, use valid TOML such as `PII_ANNOTATION_ACCESS_CODE = "FIRST-ACCESS-CODE,SECOND-ACCESS-CODE"`.
 
 The same environment variable can be configured directly in the hosting environment. The app refuses to expose the upload or annotation interface when no usable code is configured. Authentication lasts for the current Streamlit browser session, and **Log out** is available in the sidebar. Access codes are never stored in the dataframe, URL, browser storage, or repository. `.env.example` is safe to commit; `.env` is ignored by Git.
+
+`PII_ANNOTATION_SESSION_TTL_MINUTES` controls how many minutes an inactive temporary annotation session remains recoverable. It must be a positive whole number. If omitted, the app defaults to 15 minutes. Restart Streamlit after changing `.env`.
 
 The compiled custom span selector is included. To rebuild it after editing its JavaScript:
 
@@ -79,7 +82,7 @@ Arrow shortcuts are captured by one page-level listener, and browser key-repeat 
 
 Changing a Gold label updates the row draft immediately. Left/Right arrow navigation also promotes a `NOT_ANNOTATED` record to `COMPLETED`; an existing `NEEDS_REVIEW` status is preserved. Leading and trailing whitespace from browser text selection is trimmed while offsets are adjusted, so the saved slicing invariant remains exact.
 
-For large datasets, the complete downloadable CSV is cached by annotation revision and shared by the header and sidebar download buttons. It is invalidated whenever annotations, labels, status, or notes change, so a fresh complete dataset remains downloadable after every save without serializing all rows twice on every Streamlit rerun. Temporary server snapshots are likewise copied only after state changes; ordinary redraws only refresh the 15-minute activity timestamp.
+For large datasets, the complete downloadable CSV is cached by annotation revision and shared by the header and sidebar download buttons. It is invalidated whenever annotations, labels, status, or notes change, so a fresh complete dataset remains downloadable after every save without serializing all rows twice on every Streamlit rerun. Temporary server snapshots are likewise copied only after state changes; ordinary redraws only refresh the configured activity timeout.
 
 ## Temporary refresh recovery
 
@@ -93,7 +96,7 @@ The working dataframe, draft annotations, notes, filters, labels, and current ro
 
 - Refreshing the page restores the current work automatically.
 - Returning to the base app URL in the same browser tab redirects to the active session.
-- A session expires after 15 minutes without activity and is then removed from memory.
+- A session expires after the configured inactivity timeout and is then removed from memory.
 - **Start / Upload New Dataset** clears the browser route and returns to the upload screen. The old URL remains usable until its normal expiry.
 - Restarting the Streamlit server clears all temporary URL sessions. Downloaded annotated datasets remain the authoritative durable backup.
 

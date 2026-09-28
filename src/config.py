@@ -1,3 +1,31 @@
+from __future__ import annotations
+
+import os
+from pathlib import Path
+
+from dotenv import load_dotenv
+
+
+SESSION_TTL_MINUTES_ENV_VAR = "PII_ANNOTATION_SESSION_TTL_MINUTES"
+DEFAULT_SESSION_TTL_MINUTES = 15
+PROJECT_ENV_FILE = Path(__file__).resolve().parents[1] / ".env"
+
+
+def load_session_ttl_minutes() -> int:
+    """Read a positive whole-number session timeout from the environment."""
+    load_dotenv(PROJECT_ENV_FILE, override=False)
+    raw_value = os.getenv(SESSION_TTL_MINUTES_ENV_VAR)
+    if raw_value is None or not raw_value.strip():
+        return DEFAULT_SESSION_TTL_MINUTES
+    try:
+        minutes = int(raw_value.strip())
+    except ValueError as exc:
+        raise ValueError(f"{SESSION_TTL_MINUTES_ENV_VAR} must be a positive whole number.") from exc
+    if minutes <= 0:
+        raise ValueError(f"{SESSION_TTL_MINUTES_ENV_VAR} must be greater than zero.")
+    return minutes
+
+
 DEFAULT_LABELS = [
     "PERSON", "PHONE_NUMBER", "EMAIL_ADDRESS", "SSN", "PASSPORT_NUMBER",
     "DRIVER_LICENSE_NUMBER", "VEHICLE_IDENTIFIER", "INSURANCE_NUMBER", "DATE",

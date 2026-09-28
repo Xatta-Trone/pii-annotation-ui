@@ -9,12 +9,15 @@ import streamlit as st
 from span_selector import _component as span_selector_component
 from src.annotations import AnnotationError, add_annotation, change_label, delete_annotation, serialize_annotations
 from src.auth import ACCESS_CODE_ENV_VAR, access_code_matches, load_access_code
-from src.config import DEFAULT_LABELS, VALID_STATUSES
+from src.config import (
+    DEFAULT_LABELS,
+    VALID_STATUSES,
+    load_session_ttl_minutes,
+)
 from src.data_io import export_dataset, file_identity, load_dataset
 from src.label_manager import add_custom_label, label_schema_json, recover_custom_labels
 from src.navigation import filtered_indices, find_crash_id, jump_to_row, move
 from src.session_store import (
-    SESSION_TTL_SECONDS,
     create_session_id,
     prune_expired_sessions,
     restore_session,
@@ -328,8 +331,14 @@ requested_session_id = str(st.query_params.get("session", "")) or None
 if requested_session_id and not st.session_state.authenticated:
     st.session_state.pending_auth_session_id = requested_session_id
 require_authentication()
+try:
+    session_ttl_minutes = load_session_ttl_minutes()
+except ValueError as exc:
+    st.error(f"Invalid session timeout configuration: {exc}")
+    st.stop()
+session_ttl_seconds = session_ttl_minutes * 60
 WEB_SESSION_STORE = get_web_session_store()
-prune_expired_sessions(WEB_SESSION_STORE)
+prune_expired_sessions(WEB_SESSION_STORE, ttl_seconds=session_ttl_seconds)
 title_column, _, download_column = st.columns(
     [3, 2, 1.6],
     vertical_alignment="center",
@@ -343,7 +352,7 @@ url_session_id = str(st.query_params.get("session", "")) or None
 router_event = session_router(
     current_session=url_session_id,
     reset=st.session_state.clear_browser_route,
-    ttl_seconds=SESSION_TTL_SECONDS,
+    ttl_seconds=session_ttl_seconds,
     key="browser_session_router",
 )
 st.session_state.clear_browser_route = False
@@ -353,7 +362,9 @@ if router_event and router_event.get("event_id") != st.session_state.processed_r
     action = router_event.get("action")
     routed_session_id = router_event.get("session_id")
     if action == "resume" and not url_session_id and routed_session_id:
-        if restore_session(WEB_SESSION_STORE, routed_session_id) is not None:
+        if restore_session(
+            WEB_SESSION_STORE, routed_session_id, ttl_seconds=session_ttl_seconds
+        ) is not None:
             st.query_params["session"] = routed_session_id
             st.rerun()
         st.session_state.clear_browser_route = True
@@ -363,11 +374,15 @@ if router_event and router_event.get("event_id") != st.session_state.processed_r
             WEB_SESSION_STORE.pop(routed_session_id, None)
         if url_session_id:
             start_new_dataset()
-            st.session_state.landing_warning = "The annotation session expired after 15 minutes of inactivity."
+            st.session_state.landing_warning = (
+                f"The annotation session expired after {session_ttl_minutes} minutes of inactivity."
+            )
             st.rerun()
 
 if st.session_state.dataframe is None and url_session_id:
-    snapshot = restore_session(WEB_SESSION_STORE, url_session_id)
+    snapshot = restore_session(
+        WEB_SESSION_STORE, url_session_id, ttl_seconds=session_ttl_seconds
+    )
     if snapshot is not None:
         restore_web_session(snapshot, url_session_id)
     else:
@@ -431,7 +446,8 @@ with st.sidebar:
         st.rerun()
     st.divider()
     st.caption(f"Temporary session: `{st.session_state.web_session_id}`")
-    st.caption("Automatically recoverable for 15 minutes after the last activity.")
+    st.metric("Session timeout (TTL)", f"{session_ttl_minutes} min")
+    st.caption("The timer resets after activity.")
     if st.button("Start / Upload New Dataset", width="stretch"):
         persist_web_session()
         start_new_dataset()
