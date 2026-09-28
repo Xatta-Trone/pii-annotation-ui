@@ -81,6 +81,7 @@ def init_state() -> None:
         "cached_export_revision": -1,
         "cached_export_bytes": None,
         "authenticated": False,
+        "pending_auth_session_id": None,
     }
     for key, value in defaults.items():
         if key not in st.session_state:
@@ -119,6 +120,9 @@ def require_authentication() -> None:
         for expected_code in expected_codes:
             matched |= access_code_matches(provided_code, expected_code)
         if matched:
+            pending_session_id = st.session_state.pending_auth_session_id
+            if pending_session_id:
+                st.query_params["session"] = pending_session_id
             st.session_state.authenticated = True
             st.rerun()
         st.error("Incorrect access code.")
@@ -320,6 +324,9 @@ def save_and_jump(target_row_index: int) -> None:
 
 
 init_state()
+requested_session_id = str(st.query_params.get("session", "")) or None
+if requested_session_id and not st.session_state.authenticated:
+    st.session_state.pending_auth_session_id = requested_session_id
 require_authentication()
 WEB_SESSION_STORE = get_web_session_store()
 prune_expired_sessions(WEB_SESSION_STORE)
@@ -548,10 +555,7 @@ selection = span_selector_component(
     default=None,
 )
 processed_selection = st.session_state.get(f"processed_selection_{row_index}")
-if selection and selection.get("event_type") == "navigation":
-    if selection.get("event_id") != st.session_state.processed_keyboard_event:
-        st.session_state.pending_keyboard_navigation = selection
-elif selection and selection.get("selection_id") != processed_selection:
+if selection and selection.get("event_type") == "selection" and selection.get("selection_id") != processed_selection:
     st.session_state[f"selection_{row_index}"] = selection
 current_selection = st.session_state.get(f"selection_{row_index}")
 gold_column, weak_column = st.columns(2, gap="large")

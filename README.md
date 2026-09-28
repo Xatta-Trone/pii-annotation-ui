@@ -2,16 +2,26 @@
 
 A local Streamlit application for creating character-exact, human-verified PII annotations in transportation crash narratives. Weak PII candidates are displayed only as reference and are never promoted to gold automatically.
 
-## Install and run
+## Install and run from Windows Command Prompt
 
-```powershell
-python -m venv .venv
-.venv\Scripts\activate
-pip install -r requirements.txt
-Copy-Item .env.example .env
-# Edit .env and replace the placeholder access code.
-streamlit run app.py
+Install Python 3.11 or newer, download or clone this repository, and open Command Prompt in the folder that contains `app.py`. The project can be stored anywhere; no fixed download path is required.
+
+Create and use a project-local virtual environment:
+
+```cmd
+py -m venv .venv
+.venv\Scripts\python.exe -m pip install --upgrade pip
+.venv\Scripts\python.exe -m pip install -r requirements.txt
+copy .env.example .env
+rem Edit .env and replace the placeholder access codes.
+.venv\Scripts\python.exe -m streamlit run app.py
 ```
+
+If `py` is not recognized, use `python -m venv .venv` for the first command. All later commands deliberately use `.venv\Scripts\python.exe`, ensuring Streamlit, NumPy, and Pandas come from the isolated project environment rather than an incompatible global or Anaconda installation.
+
+Do not use a bare `streamlit run app.py` command when multiple Python installations are present; it may invoke Streamlit from the wrong environment and produce errors such as `ImportError: numpy.core.multiarray failed to import`.
+
+Open `http://localhost:8501` in a browser. Press `Ctrl+C` in Command Prompt to stop the server.
 
 The application is protected by an access-code gate. Configure a long, random code in the untracked `.env` file:
 
@@ -64,6 +74,8 @@ The record view shows **Clean Narrative** and **Cleaned Redacted Narrative** sid
 Custom labels are normalized to `UPPERCASE_SNAKE_CASE`. They are recovered from valid gold entities when an exported dataset is uploaded again. Use **Download Annotated Dataset** for a complete portable checkpoint and re-upload that file to resume. **Download Label Schema** exports both default and custom labels.
 
 Previous, Next, Save & Next, Mark Completed & Next, row jumps, crash-ID jumps, and the Left/Right arrow shortcuts all use the same save-before-navigation path. The current Gold entities (including relabels and deletions), status, and notes are synchronized to the working dataframe before the row changes. Arrow shortcuts are intentionally ignored while focus is inside an input, select box, text area, or editable field so normal cursor editing remains available.
+
+Arrow shortcuts are captured by one page-level listener, and browser key-repeat events are ignored, so one physical keypress advances exactly one record. Browser session routing updates activity silently to avoid component-driven rerun loops. If authentication is required, the requested `?session=...` URL is retained through the login form and restored after a successful login.
 
 Changing a Gold label updates the row draft immediately. Left/Right arrow navigation also promotes a `NOT_ANNOTATED` record to `COMPLETED`; an existing `NEEDS_REVIEW` status is preserved. Leading and trailing whitespace from browser text selection is trimmed while offsets are adjusted, so the saved slicing invariant remains exact.
 

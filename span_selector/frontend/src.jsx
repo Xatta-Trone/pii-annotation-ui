@@ -33,19 +33,6 @@ function Selector({args}) {
   useEffect(() => {
     Streamlit.setFrameHeight((rootRef.current?.parentElement?.scrollHeight || 280) + 4);
   }, [parts]);
-  useEffect(() => {
-    function navigate(event) {
-      if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
-      event.preventDefault();
-      Streamlit.setComponentValue({
-        event_type: "navigation",
-        direction: event.key === "ArrowRight" ? "next" : "previous",
-        event_id: `${Date.now()}-${Math.random()}`,
-      });
-    }
-    document.addEventListener("keydown", navigate);
-    return () => document.removeEventListener("keydown", navigate);
-  }, []);
 
   function offsetWithin(root, node, offset) {
     const range = document.createRange();
@@ -110,6 +97,7 @@ function Selector({args}) {
 }
 
 function SessionRouter({args}) {
+  const emittedEvent = useRef("");
   useEffect(() => {
     Streamlit.setFrameHeight(0);
     const sessionKey = "gold_pii_annotation_session";
@@ -121,7 +109,7 @@ function SessionRouter({args}) {
     if (args.reset) {
       sessionStorage.removeItem(sessionKey);
       sessionStorage.removeItem(activityKey);
-      Streamlit.setComponentValue({action: "cleared", event_id: eventId});
+      emittedEvent.current = "";
       return;
     }
 
@@ -130,18 +118,26 @@ function SessionRouter({args}) {
     if (lastActivity && now - lastActivity > ttlMs) {
       sessionStorage.removeItem(sessionKey);
       sessionStorage.removeItem(activityKey);
-      Streamlit.setComponentValue({action: "expired", session_id: storedSession, event_id: eventId});
+      const eventKey = `expired:${storedSession}`;
+      if (emittedEvent.current !== eventKey) {
+        emittedEvent.current = eventKey;
+        Streamlit.setComponentValue({action: "expired", session_id: storedSession, event_id: eventId});
+      }
       return;
     }
 
     if (args.current_session) {
       sessionStorage.setItem(sessionKey, args.current_session);
       sessionStorage.setItem(activityKey, String(now));
-      Streamlit.setComponentValue({action: "active", session_id: args.current_session, event_id: eventId});
+      emittedEvent.current = "";
     } else if (storedSession) {
-      Streamlit.setComponentValue({action: "resume", session_id: storedSession, event_id: eventId});
+      const eventKey = `resume:${storedSession}`;
+      if (emittedEvent.current !== eventKey) {
+        emittedEvent.current = eventKey;
+        Streamlit.setComponentValue({action: "resume", session_id: storedSession, event_id: eventId});
+      }
     }
-  }, [args.current_session, args.reset, args.ttl_seconds]);
+  });
   return null;
 }
 
@@ -152,7 +148,7 @@ function KeyboardNavigation() {
       const target = event.target;
       const tag = (target?.tagName || "").toLowerCase();
       const isEditing = target?.isContentEditable || ["input", "textarea", "select"].includes(tag);
-      if (isEditing || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
+      if (isEditing || event.repeat || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
       if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
       event.preventDefault();
       Streamlit.setComponentValue({
