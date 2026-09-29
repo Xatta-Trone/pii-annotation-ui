@@ -5,3 +5,13 @@ __pycache__/
 span_selector/frontend/node_modules/
 autosave/
 .env
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+/annotations.db
+/annotations.db-wal
+/annotations.db-shm
+.streamlit/secrets.toml
+*.log

@@ -28,6 +28,8 @@ The application is protected by an access-code gate. Configure a long, random co
 ```dotenv
 PII_ANNOTATION_ACCESS_CODE=FIRST-ACCESS-CODE,SECOND-ACCESS-CODE
 PII_ANNOTATION_SESSION_TTL_MINUTES=15
+PII_ANNOTATION_ENVIRONMENT=local
+PII_ANNOTATION_DB_PATH=
 ```
 
 One or more codes may be configured in the same variable, separated by commas. Spaces surrounding each comma are ignored, empty entries are discarded, and each entered code is otherwise matched exactly and case-sensitively. For Streamlit Cloud, use valid TOML such as `PII_ANNOTATION_ACCESS_CODE = "FIRST-ACCESS-CODE,SECOND-ACCESS-CODE"`.
@@ -35,6 +37,22 @@ One or more codes may be configured in the same variable, separated by commas. S
 The same environment variable can be configured directly in the hosting environment. The app refuses to expose the upload or annotation interface when no usable code is configured. Authentication lasts for the current Streamlit browser session, and **Log out** is available in the sidebar. Access codes are never stored in the dataframe, URL, browser storage, or repository. `.env.example` is safe to commit; `.env` is ignored by Git.
 
 `PII_ANNOTATION_SESSION_TTL_MINUTES` controls how many minutes an inactive temporary annotation session remains recoverable. It must be a positive whole number. If omitted, the app defaults to 15 minutes. Restart Streamlit after changing `.env`.
+
+## Persistence modes
+
+The app imports an uploaded CSV/TSV into SQLite once, then transactionally autosaves annotation changes, status, notes, labels, filters, and the current row. After a Streamlit restart, use the original session URL, re-upload the same source file, or choose the dataset under **Resume Saved Dataset**. Re-uploading the same source file is matched by its file hash and resumes the existing SQLite data instead of overwriting it.
+
+By default both modes use this ignored project-root database:
+
+```text
+annotations.db
+```
+
+In `local` mode, `PII_ANNOTATION_DB_PATH` may optionally point to an existing or new SQLite database. When populated, the app opens and updates that database. When blank, it uses the project-root `annotations.db`. Prefer an unsynchronized path for important work; Box, OneDrive, Dropbox, and network filesystems can interfere with SQLite's database, WAL, and SHM files.
+
+In `prod` mode, `PII_ANNOTATION_DB_PATH` is intentionally ignored and the app uses project-root `annotations.db`. Because the database and its WAL/SHM files are Git-ignored, a fresh production deployment starts with an absent database and creates fresh empty tables. Ordinary Streamlit reruns or process reloads within the same deployment reuse the existing file; the app never deletes it during startup.
+
+CSV/TSV remains the import, export, and portable-backup format. It is not used as the live autosave store because changing one annotation would require rewriting the complete file; SQLite updates only the affected record atomically.
 
 The compiled custom span selector is included. To rebuild it after editing its JavaScript:
 

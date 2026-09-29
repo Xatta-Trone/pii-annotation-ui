@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 from datetime import datetime
 
 import pandas as pd
@@ -12,10 +13,20 @@ from src.auth import ACCESS_CODE_ENV_VAR, access_code_matches, load_access_code
 from src.config import (
     DEFAULT_LABELS,
     VALID_STATUSES,
+    load_database_path,
+    load_runtime_environment,
     load_session_ttl_minutes,
 )
 from src.data_io import export_dataset, file_identity, load_dataset
 from src.label_manager import add_custom_label, label_schema_json, recover_custom_labels
+from src.local_store import (
+    create_local_dataset,
+    initialize_database,
+    list_local_datasets,
+    load_local_dataset,
+    load_local_session,
+    update_local_session,
+)
 from src.navigation import filtered_indices, find_crash_id, jump_to_row, move
 from src.session_store import (
     create_session_id,
@@ -68,6 +79,8 @@ def init_state() -> None:
         "dataframe": None,
         "current_row_index": 0,
         "uploaded_file_identity": None,
+        "uploaded_filename": None,
+        "local_dataset_id": None,
         "custom_labels": [],
         "filter_state": {},
         "drafts": {},
@@ -251,6 +264,8 @@ def persist_web_session() -> None:
             "dataframe": st.session_state.dataframe,
             "current_row_index": st.session_state.current_row_index,
             "uploaded_file_identity": st.session_state.uploaded_file_identity,
+            "uploaded_filename": st.session_state.uploaded_filename,
+            "local_dataset_id": st.session_state.local_dataset_id,
             "custom_labels": st.session_state.custom_labels,
             "filter_state": st.session_state.filter_state,
             "drafts": st.session_state.drafts,
@@ -260,6 +275,22 @@ def persist_web_session() -> None:
         },
         revision=st.session_state.state_revision,
     )
+    if st.session_state.local_dataset_id:
+        row_index = st.session_state.current_row_index
+        try:
+            update_local_session(
+                database_path,
+                st.session_state.local_dataset_id,
+                current_row_index=row_index,
+                current_draft=st.session_state.drafts[row_index],
+                custom_labels=st.session_state.custom_labels,
+                filter_state=st.session_state.filter_state,
+                load_warnings=st.session_state.load_warnings,
+                revision=st.session_state.state_revision,
+            )
+        except (OSError, sqlite3.Error, KeyError) as exc:
+            st.error(f"Local autosave failed. Navigation has been stopped: {exc}")
+            st.stop()
 
 
 def restore_web_session(snapshot: dict, session_id: str) -> None:
@@ -268,6 +299,8 @@ def restore_web_session(snapshot: dict, session_id: str) -> None:
         "filter_state", "drafts", "load_warnings",
     ):
         st.session_state[key] = snapshot[key]
+    st.session_state.uploaded_filename = snapshot.get("uploaded_filename")
+    st.session_state.local_dataset_id = snapshot.get("local_dataset_id")
     # Sessions created before revisioned caching remain recoverable during a hot reload.
     st.session_state.state_revision = int(snapshot.get("state_revision", 0))
     st.session_state.export_revision = int(snapshot.get("export_revision", 0))
@@ -288,6 +321,8 @@ def start_new_dataset() -> None:
         "dataframe": None,
         "current_row_index": 0,
         "uploaded_file_identity": None,
+        "uploaded_filename": None,
+        "local_dataset_id": None,
         "custom_labels": [],
         "filter_state": {},
         "drafts": {},
@@ -332,11 +367,18 @@ if requested_session_id and not st.session_state.authenticated:
     st.session_state.pending_auth_session_id = requested_session_id
 require_authentication()
 try:
+    runtime_environment = load_runtime_environment()
     session_ttl_minutes = load_session_ttl_minutes()
 except ValueError as exc:
-    st.error(f"Invalid session timeout configuration: {exc}")
+    st.error(f"Invalid application configuration: {exc}")
     st.stop()
 session_ttl_seconds = session_ttl_minutes * 60
+database_path = load_database_path(runtime_environment)
+try:
+    initialize_database(database_path)
+except (OSError, sqlite3.Error) as exc:
+    st.error(f"Could not initialize SQLite storage: {exc}")
+    st.stop()
 WEB_SESSION_STORE = get_web_session_store()
 prune_expired_sessions(WEB_SESSION_STORE, ttl_seconds=session_ttl_seconds)
 title_column, _, download_column = st.columns(
@@ -361,15 +403,10 @@ if router_event and router_event.get("event_id") != st.session_state.processed_r
     st.session_state.processed_router_event = router_event.get("event_id")
     action = router_event.get("action")
     routed_session_id = router_event.get("session_id")
-    if action == "resume" and not url_session_id and routed_session_id:
-        if restore_session(
-            WEB_SESSION_STORE, routed_session_id, ttl_seconds=session_ttl_seconds
-        ) is not None:
-            st.query_params["session"] = routed_session_id
-            st.rerun()
-        st.session_state.clear_browser_route = True
-        st.session_state.landing_warning = "The previous browser session has expired. Upload a dataset to begin again."
-    elif action == "expired":
+    # The root URL is an intentional dataset chooser. A browser-stored session
+    # must never auto-open a dataset; users resume explicitly from the list.
+    # Session URLs still restore below when the URL contains ?session=...
+    if action == "expired":
         if routed_session_id:
             WEB_SESSION_STORE.pop(routed_session_id, None)
         if url_session_id:
@@ -383,6 +420,8 @@ if st.session_state.dataframe is None and url_session_id:
     snapshot = restore_session(
         WEB_SESSION_STORE, url_session_id, ttl_seconds=session_ttl_seconds
     )
+    if snapshot is None:
+        snapshot = load_local_session(database_path, url_session_id)
     if snapshot is not None:
         restore_web_session(snapshot, url_session_id)
     else:
@@ -409,6 +448,13 @@ if uploaded is not None:
     content = uploaded.getvalue()
     identity = file_identity(uploaded.name, content)
     if identity != st.session_state.uploaded_file_identity:
+        existing_local = load_local_dataset(database_path, identity)
+        if existing_local is not None:
+            existing_session_id = existing_local["web_session_id"]
+            restore_web_session(existing_local, existing_session_id)
+            st.query_params["session"] = existing_session_id
+            st.session_state.flash = "Resumed the existing SQLite dataset."
+            st.rerun()
         try:
             loaded = load_dataset(content, uploaded.name)
         except Exception as exc:
@@ -416,6 +462,7 @@ if uploaded is not None:
             st.stop()
         st.session_state.dataframe = loaded
         st.session_state.uploaded_file_identity = identity
+        st.session_state.uploaded_filename = uploaded.name
         st.session_state.custom_labels = recover_custom_labels(
             loaded["gold_entities_json"], loaded["clean_narrative"]
         )
@@ -425,10 +472,51 @@ if uploaded is not None:
         mark_state_changed(affects_export=True)
         session_id = create_session_id(identity)
         st.session_state.web_session_id = session_id
+        st.session_state.local_dataset_id = identity
+        try:
+            create_local_dataset(
+                database_path,
+                identity,
+                session_id,
+                uploaded.name,
+                loaded,
+                st.session_state.drafts,
+                current_row_index=st.session_state.current_row_index,
+                custom_labels=st.session_state.custom_labels,
+                filter_state=st.session_state.filter_state,
+                load_warnings=st.session_state.load_warnings,
+                revision=st.session_state.state_revision,
+            )
+        except (OSError, sqlite3.Error) as exc:
+            st.error(f"Could not persist the uploaded dataset to SQLite: {exc}")
+            st.stop()
         st.query_params["session"] = session_id
         persist_web_session()
         st.session_state.flash = f"Loaded {len(loaded):,} records."
         st.rerun()
+
+if st.session_state.dataframe is None:
+    recent_datasets = list_local_datasets(database_path)
+    if recent_datasets:
+        st.subheader("Resume Saved Dataset")
+        recent_by_id = {item["dataset_id"]: item for item in recent_datasets}
+        selected_dataset_id = st.selectbox(
+            "Saved dataset",
+            list(recent_by_id),
+            format_func=lambda dataset_id: (
+                f'{recent_by_id[dataset_id]["filename"]} · '
+                f'{recent_by_id[dataset_id]["completed_count"]:,} of '
+                f'{recent_by_id[dataset_id]["row_count"]:,} completed · '
+                f'updated {recent_by_id[dataset_id]["updated_at"]}'
+            ),
+        )
+        if st.button("Resume Selected Dataset", type="primary"):
+            local_snapshot = load_local_dataset(database_path, selected_dataset_id)
+            if local_snapshot is not None:
+                local_session_id = local_snapshot["web_session_id"]
+                restore_web_session(local_snapshot, local_session_id)
+                st.query_params["session"] = local_session_id
+                st.rerun()
 
 if st.session_state.dataframe is None:
     if st.session_state.landing_warning:
@@ -446,6 +534,10 @@ with st.sidebar:
         st.rerun()
     st.divider()
     st.caption(f"Temporary session: `{st.session_state.web_session_id}`")
+    if runtime_environment == "local":
+        st.caption("Storage: Local SQLite (autosaved)")
+    else:
+        st.caption("Storage: Deployment-local SQLite (autosaved)")
     st.metric("Session timeout (TTL)", f"{session_ttl_minutes} min")
     st.caption("The timer resets after activity.")
     if st.button("Start / Upload New Dataset", width="stretch"):
